@@ -26,6 +26,11 @@ function formatRUT(value) {
   return `${cuerpo}-${clean.slice(-1)}`
 }
 
+// Solo permite números y guión para el número de causa
+function formatNumeroCausa(value) {
+  return value.replace(/[^0-9-]/g, '')
+}
+
 const etapas = ['Investigacion', 'Imputado', 'Procesado', 'A juicio', 'Sentencia']
 const tribunales = [
   '1° Juzgado Civil de Puerto Montt', '2° Juzgado Civil de Puerto Montt',
@@ -53,16 +58,18 @@ export default function ModalNuevaCausa({ onClose, onCreada }) {
     else setRutValido(null)
   }
 
+  const onNumero = (v) => {
+    set('numero', formatNumeroCausa(v))
+  }
+
   const guardar = async () => {
     setError('')
-
-    // Validar todos los campos obligatorios
     if (!form.numero.trim()) { setError('El número de causa es obligatorio'); return }
     if (!form.caratula.trim()) { setError('La carátula es obligatoria'); return }
+    if (!form.etapa) { setError('La etapa procesal es obligatoria'); return }
     if (!form.imputado_nombre.trim()) { setError('El nombre del imputado es obligatorio'); return }
     if (!form.imputado_rut.trim()) { setError('El RUT del imputado es obligatorio'); return }
     if (!validarRUT(form.imputado_rut)) { setError('El RUT del imputado no es válido'); return }
-    if (!form.etapa) { setError('La etapa procesal es obligatoria'); return }
     if (!form.tribunal) { setError('El tribunal es obligatorio'); return }
     if (!form.delito.trim()) { setError('El delito es obligatorio'); return }
     if (!form.fiscal.trim()) { setError('El fiscal es obligatorio'); return }
@@ -124,8 +131,13 @@ export default function ModalNuevaCausa({ onClose, onCreada }) {
 
         <div className="form-row">
           <div className="form-group">
-            <label className="form-label">Número de causa *</label>
-            <input value={form.numero} onChange={e => set('numero', e.target.value)} placeholder="Ej: 9502-2026" />
+            <label className="form-label">Número de causa * <span style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'none', fontWeight: 400, letterSpacing: 0 }}>— solo números y guión</span></label>
+            <input
+              value={form.numero}
+              onChange={e => onNumero(e.target.value)}
+              placeholder="Ej: 1234-2026"
+              inputMode="numeric"
+            />
           </div>
           <div className="form-group">
             <label className="form-label">Etapa procesal *</label>

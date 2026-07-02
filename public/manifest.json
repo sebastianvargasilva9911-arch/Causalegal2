@@ -1,0 +1,11 @@
+{
+  "short_name": "CausaLegal",
+  "name": "CausaLegal - Gestión Penal",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0d0f14",
+  "background_color": "#0d0f14",
+  "icons": [
+    { "src": "favicon.ico", "sizes": "64x64", "type": "image/x-icon" }
+  ]
+}

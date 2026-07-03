@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import supabase from '../supabase'
 import { etapaClass, formatFecha } from '../hooks/helpers'
@@ -16,6 +16,7 @@ const TRIBUNALES = [
 export default function FichaCausa() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const fileRef = useRef()
   const [causa, setCausa] = useState(null)
   const [tab, setTab] = useState('historial')
   const [nuevaNota, setNuevaNota] = useState('')
@@ -24,9 +25,11 @@ export default function FichaCausa() {
   const [form, setForm] = useState({})
   const [confirmarEliminar, setConfirmarEliminar] = useState(false)
   const [confirmarArchivar, setConfirmarArchivar] = useState(false)
+  const [confirmarEliminarDoc, setConfirmarEliminarDoc] = useState(null)
   const [modalAudiencia, setModalAudiencia] = useState(false)
   const [nuevaAudiencia, setNuevaAudiencia] = useState({ titulo: '', fecha: '', hora: '', tipo: 'audiencia', descripcion: '' })
   const [guardandoAudiencia, setGuardandoAudiencia] = useState(false)
+  const [subiendoDoc, setSubiendoDoc] = useState(false)
 
   const cargar = async () => {
     const { data } = await supabase.from('causas').select(`*, imputados(*), historial(*), notas(*), documentos(*), eventos(*)`).eq('id', id).single()
@@ -34,6 +37,7 @@ export default function FichaCausa() {
       data.historial?.sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en))
       data.notas?.sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en))
       data.eventos?.sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
+      data.documentos?.sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en))
       setCausa(data); setForm(data)
     }
   }
@@ -61,6 +65,11 @@ export default function FichaCausa() {
   }
 
   const eliminarCausa = async () => {
+    // Eliminar archivos de storage
+    const { data: docs } = await supabase.from('documentos').select('storage_path').eq('causa_id', id)
+    if (docs?.length) {
+      await supabase.storage.from('documentos').remove(docs.map(d => d.storage_path))
+    }
     await supabase.from('notas').delete().eq('causa_id', id)
     await supabase.from('historial').delete().eq('causa_id', id)
     await supabase.from('documentos').delete().eq('causa_id', id)
@@ -78,7 +87,7 @@ export default function FichaCausa() {
   }
 
   const guardarAudiencia = async () => {
-    if (!nuevaAudiencia.titulo || !nuevaAudiencia.fecha) { toast('Completá título y fecha', 'error'); return }
+    if (!nuevaAudiencia.titulo || !nuevaAudiencia.fecha) { toast('Completa título y fecha', 'error'); return }
     setGuardandoAudiencia(true)
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('eventos').insert({ ...nuevaAudiencia, causa_id: id, usuario_id: user.id })
@@ -88,6 +97,59 @@ export default function FichaCausa() {
     toast('Audiencia agregada'); cargar()
   }
 
+  const subirDocumento = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) { toast('El archivo no puede superar 10MB', 'error'); return }
+    setSubiendoDoc(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const ext = file.name.split('.').pop()
+      const storagePath = `${user.id}/${id}/${Date.now()}.${ext}`
+      const { error: errUp } = await supabase.storage.from('documentos').upload(storagePath, file)
+      if (errUp) throw errUp
+      await supabase.from('documentos').insert({
+        nombre: file.name,
+        tipo: ext,
+        tamanio: `${(file.size / 1024).toFixed(0)} KB`,
+        storage_path: storagePath,
+        causa_id: id
+      })
+      toast('Documento subido correctamente')
+      cargar()
+    } catch (e) {
+      toast('Error al subir el documento', 'error')
+    } finally {
+      setSubiendoDoc(false)
+      e.target.value = ''
+    }
+  }
+
+  const descargarDocumento = async (doc) => {
+    try {
+      const { data, error } = await supabase.storage.from('documentos').download(doc.storage_path)
+      if (error) throw error
+      const url = URL.createObjectURL(data)
+      const a = document.createElement('a')
+      a.href = url; a.download = doc.nombre; a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast('Error al descargar el documento', 'error')
+    }
+  }
+
+  const eliminarDocumento = async (doc) => {
+    try {
+      await supabase.storage.from('documentos').remove([doc.storage_path])
+      await supabase.from('documentos').delete().eq('id', doc.id)
+      toast('Documento eliminado', 'warn')
+      cargar()
+    } catch {
+      toast('Error al eliminar el documento', 'error')
+    }
+    setConfirmarEliminarDoc(null)
+  }
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setAud = (k, v) => setNuevaAudiencia(f => ({ ...f, [k]: v }))
 
@@ -95,6 +157,11 @@ export default function FichaCausa() {
 
   const imp = causa.imputados?.[0]
   const archivada = causa.etapa === 'Sobreseido' || causa.etapa === 'Sentencia'
+
+  const iconoDoc = (tipo) => {
+    const map = { pdf: 'ti-file-type-pdf', doc: 'ti-file-type-doc', docx: 'ti-file-type-doc', jpg: 'ti-photo', jpeg: 'ti-photo', png: 'ti-photo' }
+    return map[tipo?.toLowerCase()] || 'ti-file'
+  }
 
   return (
     <>
@@ -142,7 +209,7 @@ export default function FichaCausa() {
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="section-title"><i className="ti ti-edit"></i>Editar causa</div>
           <div className="form-row">
-            <div className="form-group"><label className="form-label">Número</label><input value={form.numero || ''} onChange={e => set('numero', e.target.value)} /></div>
+            <div className="form-group"><label className="form-label">Número</label><input value={form.numero || ''} onChange={e => set('numero', e.target.value.replace(/[^0-9-]/g, ''))} /></div>
             <div className="form-group"><label className="form-label">Etapa</label>
               <select value={form.etapa || ''} onChange={e => set('etapa', e.target.value)}>
                 {etapas.map(e => <option key={e}>{e}</option>)}
@@ -153,7 +220,6 @@ export default function FichaCausa() {
           <div className="form-row">
             <div className="form-group"><label className="form-label">Tribunal</label>
               <select value={form.tribunal || ''} onChange={e => set('tribunal', e.target.value)}>
-                <option value="">Seleccionar...</option>
                 {TRIBUNALES.map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
@@ -181,7 +247,7 @@ export default function FichaCausa() {
       )}
 
       <div className="tabs">
-        {[['historial', 'Historial'], ['documentos', 'Documentos'], ['notas', 'Notas'], ['eventos', `Audiencias ${causa.eventos?.length ? `(${causa.eventos.length})` : ''}`]].map(([k, v]) => (
+        {[['historial', 'Historial'], ['documentos', `Documentos${causa.documentos?.length ? ` (${causa.documentos.length})` : ''}`], ['notas', 'Notas'], ['eventos', `Audiencias${causa.eventos?.length ? ` (${causa.eventos.length})` : ''}`]].map(([k, v]) => (
           <button key={k} className={`tab ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>{v}</button>
         ))}
       </div>
@@ -204,16 +270,40 @@ export default function FichaCausa() {
 
       {tab === 'documentos' && (
         <div>
-          {causa.documentos?.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 12 }}>Sin documentos</div>}
+          {causa.documentos?.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--muted)' }}>
+              <i className="ti ti-files" style={{ fontSize: 36, display: 'block', marginBottom: 8, opacity: .4 }}></i>
+              <div style={{ fontSize: 13 }}>Sin documentos adjuntos</div>
+            </div>
+          )}
           {causa.documentos?.map(d => (
             <div key={d.id} className="card-sm" style={{ marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <i className="ti ti-file-text" style={{ fontSize: 20, color: 'var(--accent)' }}></i>
-                <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 500 }}>{d.nombre}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{d.tamanio}</div></div>
+                <i className={`ti ${iconoDoc(d.tipo)}`} style={{ fontSize: 22, color: 'var(--accent)', flexShrink: 0 }}></i>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.nombre}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>{d.tamanio} · {new Date(d.creado_en).toLocaleDateString('es-CL')}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: 12 }} onClick={() => descargarDocumento(d)} title="Descargar">
+                    <i className="ti ti-download"></i>
+                  </button>
+                  <button onClick={() => setConfirmarEliminarDoc(d)} style={{ padding: '5px 8px', borderRadius: 6, background: 'rgba(248,113,113,.1)', color: 'var(--danger)', border: '1px solid rgba(248,113,113,.2)', cursor: 'pointer', fontSize: 12 }} title="Eliminar">
+                    <i className="ti ti-trash"></i>
+                  </button>
+                </div>
               </div>
             </div>
           ))}
-          <button className="btn btn-ghost" style={{ marginTop: 8 }}><i className="ti ti-upload"></i>Subir documento</button>
+
+          <div style={{ marginTop: 12 }}>
+            <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={subirDocumento} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx" />
+            <button className="btn btn-ghost" onClick={() => fileRef.current.click()} disabled={subiendoDoc}>
+              <i className={`ti ${subiendoDoc ? 'ti-loader-2' : 'ti-upload'}`}></i>
+              {subiendoDoc ? 'Subiendo...' : 'Subir documento'}
+            </button>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>PDF, Word, Excel, imágenes · Máximo 10MB</div>
+          </div>
         </div>
       )}
 
@@ -256,7 +346,6 @@ export default function FichaCausa() {
         </div>
       )}
 
-      {/* Modal nueva audiencia */}
       {modalAudiencia && (
         <div className="modal-backdrop open" onClick={e => e.target === e.currentTarget && setModalAudiencia(false)}>
           <div className="modal">
@@ -287,7 +376,7 @@ export default function FichaCausa() {
       {confirmarEliminar && (
         <ModalConfirmar
           titulo="Eliminar causa"
-          descripcion={`¿Eliminás permanentemente la Causa N° ${causa.numero}? Esta acción no se puede deshacer.`}
+          descripcion={`¿Eliminas permanentemente la Causa N° ${causa.numero}? Esta acción no se puede deshacer.`}
           onConfirmar={eliminarCausa}
           onCancelar={() => setConfirmarEliminar(false)}
         />
@@ -296,10 +385,19 @@ export default function FichaCausa() {
       {confirmarArchivar && (
         <ModalConfirmar
           titulo="Archivar causa"
-          descripcion={`¿Archivás la Causa N° ${causa.numero}? Se marcará como sobreseída pero podrás seguir consultándola.`}
+          descripcion={`¿Archivas la Causa N° ${causa.numero}? Se marcará como sobreseída pero podrás seguir consultándola.`}
           onConfirmar={archivarCausa}
           onCancelar={() => setConfirmarArchivar(false)}
           peligro={false}
+        />
+      )}
+
+      {confirmarEliminarDoc && (
+        <ModalConfirmar
+          titulo="Eliminar documento"
+          descripcion={`¿Eliminas "${confirmarEliminarDoc.nombre}"? Esta acción no se puede deshacer.`}
+          onConfirmar={() => eliminarDocumento(confirmarEliminarDoc)}
+          onCancelar={() => setConfirmarEliminarDoc(null)}
         />
       )}
     </>
